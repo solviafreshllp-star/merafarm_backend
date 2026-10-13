@@ -1,0 +1,241 @@
+// MeraFarm — core data model
+//
+// Design notes carried over from the prototype:
+// - Campaign is the unit everything else keys off (never "product" alone),
+//   because the same product can run multiple simultaneous campaigns at
+//   different reach levels (e.g. a Powai-only run and a citywide run).
+// - scopeType + the scope* fields encode the reach hierarchy
+//   (City -> Pincode -> Locality -> Society). scopeType decides which of
+//   those fields are "frozen" onto an order automatically at checkout.
+// - Money is stored as Int rupees to match the prototype 1:1. Before this
+//   goes near real payments, switch to Int minor units (paise) or
+//   Prisma's Decimal to avoid any float/rounding ambiguity — flagging
+//   explicitly rather than quietly leaving a real-money footgun.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://postgres:India@2994@localhost:5432/merafarmDB?schema=public"
+}
+
+enum ScopeType {
+  SOCIETY
+  LOCALITY
+  PINCODE
+  CITY
+  NATIONAL
+}
+
+enum CampaignStatus {
+  DRAFT
+  LIVE
+  CLOSED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum ComplaintStatus {
+  OPEN
+  RESOLVED
+}
+
+enum ReferralEventType {
+  INVITED
+  JOINED
+  ORDER_PLACED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  phone        String   @unique
+  email        String?
+  passwordHash String? // set once a user opts into password login; OTP works without it
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // a seller/farmer account owns campaigns; nullable because most users are buyers
+  isSeller Boolean @default(false)
+
+  campaigns      Campaign[]      @relation("CampaignSeller")
+  orders         Order[]
+  complaints     Complaint[]
+  referralLinks  ReferralLink[]
+  addressBook    Address[]
+
+  @@index([phone])
+}
+
+// A saved delivery address for a user. Orders copy the relevant fields onto
+// themselves at checkout time (see Order below) rather than pointing at this
+// row, since a campaign's frozen fields must win over whatever's saved here.
+model Address {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  flat      String
+  wing      String?
+  landmark  String?
+  note      String?
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Campaign {
+  id          String         @id @default(cuid())
+  productName String
+  description String?
+  farmName    String
+  unitLabel   String         @default("dozen") // dozen | kg | piece | box
+  mediaUrls   String[]       @default([])
+
+  scopeType     ScopeType
+  scopeCity     String?
+  scopePincode  String?
+  scopeLocality String?
+  scopeSociety  String?
+
+  capUnits    Int
+  bookedUnits Int            @default(0) // denormalized; kept in sync inside a DB transaction on order create/cancel
+
+  status  CampaignStatus @default(DRAFT)
+  startAt DateTime
+  endAt   DateTime
+
+  sellerId String
+  seller   User   @relation("CampaignSeller", fields: [sellerId], references: [id])
+
+  slabs         PriceSlab[]
+  orders        Order[]
+  referralLinks ReferralLink[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scopeType])
+}
+
+model PriceSlab {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  fromQty    Int // minimum cumulative booked units to unlock this slab
+  price      Int // rupees — see money-storage note at top of file
+
+  @@index([campaignId, fromQty])
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  orderNumber String      @unique // human-friendly, e.g. ORD481203
+
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+  campaignId String
+  campaign   Campaign    @relation(fields: [campaignId], references: [id])
+
+  quantity          Int
+  unitPriceCharged  Int // the tier price this order's own quantity unlocked — see pricing.util.ts
+  amount            Int // quantity * unitPriceCharged
+
+  status        OrderStatus @default(PENDING_PAYMENT)
+  paymentRef    String? // gateway payment/order id
+  paymentMethod String? // upi | card | netbanking | wallet
+
+  // address is frozen onto the order at checkout time — city/pincode/locality/
+  // society come from the campaign's own scope fields where the campaign's
+  // scopeType locks them, and from the buyer's input otherwise (see the
+  // address-hierarchy logic in campaigns.service.ts / the frontend checkout).
+  addressCity     String
+  addressPincode  String
+  addressLocality String
+  addressSociety  String
+  addressFlat     String
+  addressWing     String?
+  addressLandmark String?
+  deliveryNote    String?
+
+  referralLinkId String?
+  referralLink   ReferralLink? @relation(fields: [referralLinkId], references: [id])
+
+  complaints Complaint[]
+  refunds    Refund[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([campaignId])
+}
+
+model Refund {
+  id        String       @id @default(cuid())
+  orderId   String
+  order     Order        @relation(fields: [orderId], references: [id])
+  amount    Int
+  reason    String
+  status    RefundStatus @default(PENDING)
+  createdAt DateTime     @default(now())
+
+  @@index([orderId])
+}
+
+model Complaint {
+  id          String          @id @default(cuid())
+  orderId     String
+  order       Order           @relation(fields: [orderId], references: [id])
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  category    String
+  description String
+  status      ComplaintStatus @default(OPEN)
+  createdAt   DateTime        @default(now())
+
+  @@index([orderId])
+  @@index([userId])
+}
+
+// One referral code per user per campaign — see the "Referral & gamification
+// backend" note this mirrors from the prototype's admin panel.
+model ReferralLink {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  code       String   @unique
+  createdAt  DateTime @default(now())
+
+  events ReferralEvent[]
+  orders Order[]
+
+  @@unique([userId, campaignId])
+}
+
+model ReferralEvent {
+  id             String            @id @default(cuid())
+  referralLinkId String
+  referralLink   ReferralLink      @relation(fields: [referralLinkId], references: [id])
+  type           ReferralEventType
+  unitsAdded     Int?
+  referredUserId String?
+  createdAt      DateTime          @default(now())
+
+  @@index([referralLinkId])
+}
