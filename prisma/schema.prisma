@@ -18,7 +18,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://postgres:India@2994@localhost:5432/merafarmDB?schema=public"
+  url      = env("DATABASE_URL")
 }
 
 enum ScopeType {
@@ -31,7 +31,9 @@ enum ScopeType {
 
 enum CampaignStatus {
   DRAFT
+  PENDING_REVIEW
   LIVE
+  REJECTED
   CLOSED
 }
 
@@ -71,11 +73,20 @@ model User {
   // a seller/farmer account owns campaigns; nullable because most users are buyers
   isSeller Boolean @default(false)
 
+  // Simple boolean admin flag for now — deliberately not a role/permission
+  // model yet (see TASKS.md 1.8 / 2.6). isSuspended blocks login without
+  // deleting the account's order history.
+  isAdmin     Boolean @default(false)
+  isSuspended Boolean @default(false)
+
   campaigns      Campaign[]      @relation("CampaignSeller")
   orders         Order[]
+  orderGroups    OrderGroup[]
   complaints     Complaint[]
   referralLinks  ReferralLink[]
   addressBook    Address[]
+  cart           Cart?
+  notifications  Notification[]
 
   @@index([phone])
 }
@@ -114,9 +125,10 @@ model Campaign {
   capUnits    Int
   bookedUnits Int            @default(0) // denormalized; kept in sync inside a DB transaction on order create/cancel
 
-  status  CampaignStatus @default(DRAFT)
-  startAt DateTime
-  endAt   DateTime
+  status          CampaignStatus @default(DRAFT)
+  rejectionReason String? // set when an admin rejects a PENDING_REVIEW campaign; surfaced to the seller via Notification
+  startAt         DateTime
+  endAt           DateTime
 
   sellerId String
   seller   User   @relation("CampaignSeller", fields: [sellerId], references: [id])
@@ -124,6 +136,7 @@ model Campaign {
   slabs         PriceSlab[]
   orders        Order[]
   referralLinks ReferralLink[]
+  cartItems     CartItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -174,6 +187,12 @@ model Order {
   referralLinkId String?
   referralLink   ReferralLink? @relation(fields: [referralLinkId], references: [id])
 
+  // Nullable: single-order checkouts (legacy path, still supported) never
+  // set this. Multi-campaign cart checkouts (see Cart/OrderGroup below) set
+  // it so N orders from one payment can be confirmed/expired together.
+  orderGroupId String?
+  orderGroup   OrderGroup? @relation(fields: [orderGroupId], references: [id])
+
   complaints Complaint[]
   refunds    Refund[]
 
@@ -182,6 +201,82 @@ model Order {
 
   @@index([userId])
   @@index([campaignId])
+  @@index([orderGroupId])
+}
+
+// The checkout/payment unit for a multi-campaign cart: one Razorpay order,
+// one payment, N child Orders (one per campaign in the cart) all reserved
+// atomically in a single transaction. Refunds still happen per-Order (see
+// Refund) — the group only coordinates payment and expiry, not refunds.
+model OrderGroup {
+  id              String      @id @default(cuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  razorpayOrderId String?
+  status          OrderStatus @default(PENDING_PAYMENT)
+
+  orders Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// One cart per user. Kept persisted (not session-only) so a buyer's cart
+// survives across devices/sessions, same as the rest of the app's state.
+model Cart {
+  id        String     @id @default(cuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id])
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id         String   @id @default(cuid())
+  cartId     String
+  cart       Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  quantity   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([cartId, campaignId])
+  @@index([campaignId])
+}
+
+// In-app notifications delivered over the existing Socket.IO infrastructure
+// (see NotificationsGateway, same room-per-user shape as CampaignsGateway).
+// Deliberately not wired to a push provider (FCM/web-push) yet — see
+// TASKS.md 1.14 for when that becomes worth adding.
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String // e.g. "CAMPAIGN_REJECTED" | "REFUND_STATUS" | "ADMIN_BROADCAST"
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+// Minimal audit trail for admin actions that a seller/buyer could later
+// dispute (campaign edits, approvals/rejections, manual refunds, etc).
+model AuditLog {
+  id          String   @id @default(cuid())
+  adminUserId String
+  action      String // e.g. "campaign.edit" | "campaign.approve" | "refund.manual"
+  targetType  String // e.g. "Campaign" | "Order" | "User"
+  targetId    String
+  changes     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([targetType, targetId])
 }
 
 model Refund {
@@ -197,15 +292,17 @@ model Refund {
 }
 
 model Complaint {
-  id          String          @id @default(cuid())
-  orderId     String
-  order       Order           @relation(fields: [orderId], references: [id])
-  userId      String
-  user        User            @relation(fields: [userId], references: [id])
-  category    String
-  description String
-  status      ComplaintStatus @default(OPEN)
-  createdAt   DateTime        @default(now())
+  id             String          @id @default(cuid())
+  orderId        String
+  order          Order           @relation(fields: [orderId], references: [id])
+  userId         String
+  user           User            @relation(fields: [userId], references: [id])
+  category       String
+  description    String
+  status         ComplaintStatus @default(OPEN)
+  resolutionNote String?
+  resolvedAt     DateTime?
+  createdAt      DateTime        @default(now())
 
   @@index([orderId])
   @@index([userId])

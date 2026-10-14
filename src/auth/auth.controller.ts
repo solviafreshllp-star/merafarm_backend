@@ -18,7 +18,7 @@ export class AuthController {
 
   @Post('verify-otp')
   verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.auth.verifyOtp(dto.phone, dto.otp, dto.name);
+    return this.auth.verifyOtp(dto.phone, dto.otp, dto.name, dto.referralCode);
   }
 
   @Post('login')

@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto, ConfirmPaymentDto } from './dto/order.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -10,6 +11,10 @@ import { JwtPayload } from '../auth/jwt-payload';
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
+  // Tighter than the global default (100/60s) — order creation races a
+  // price-slab threshold, so it's a scalping/abuse surface the same way OTP
+  // requests are a cost surface.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateOrderDto) {
     return this.orders.createOrder(user.sub, dto);

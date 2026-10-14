@@ -8,6 +8,7 @@ import { RazorpayService } from '../payments/razorpay.service';
 import { currentPrice } from '../campaigns/pricing.util';
 import { CreateOrderDto, ConfirmPaymentDto } from './dto/order.dto';
 import { RefundJobData } from '../jobs/refunds.processor';
+import { resolveOrderAddress } from './address-scope.util';
 
 @Injectable()
 export class OrdersService {
@@ -33,6 +34,7 @@ export class OrdersService {
       : null;
 
     const orderNumber = 'ORD' + Math.floor(100000 + Math.random() * 900000);
+    const address = resolveOrderAddress(campaignRow, dto);
 
     const order = await this.prisma.order.create({
       data: {
@@ -43,18 +45,7 @@ export class OrdersService {
         unitPriceCharged: unitPrice,
         amount,
         status: OrderStatus.PENDING_PAYMENT,
-        // Address fields ABOVE the campaign's scope depth always come from
-        // the campaign itself — never from client input — so a buyer can
-        // never spoof a cheaper or mismatched delivery scope. Fields below
-        // the depth come from what they typed.
-        addressCity: campaignRow.scopeCity ?? '',
-        addressPincode: campaignRow.scopePincode ?? '',
-        addressLocality: campaignRow.scopeLocality ?? '',
-        addressSociety: campaignRow.scopeSociety ?? dto.flat, // NATIONAL/CITY-scope campaigns have no society on file
-        addressFlat: dto.flat,
-        addressWing: dto.wing,
-        addressLandmark: dto.landmark,
-        deliveryNote: dto.deliveryNote,
+        ...address,
         referralLinkId: referralLink?.id,
       },
     });

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { BullModule } from '@nestjs/bullmq';
@@ -9,10 +10,18 @@ import { CampaignsModule } from './campaigns/campaigns.module';
 import { OrdersModule } from './orders/orders.module';
 import { ComplaintsModule } from './complaints/complaints.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { ReferralsModule } from './referrals/referrals.module';
+import { CartModule } from './cart/cart.module';
+import { AdminModule } from './admin/admin.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { RefundsModule } from './refunds/refunds.module';
+import { HealthModule } from './health/health.module';
+import { envValidationSchema } from './config/env.validation';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ isGlobal: true, validationSchema: envValidationSchema }),
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]), // sane default; auth endpoints tighten this further
     BullModule.forRoot({
       connection: {
@@ -22,10 +31,16 @@ import { RealtimeModule } from './realtime/realtime.module';
     }),
     PrismaModule,
     RealtimeModule,
+    NotificationsModule,
     AuthModule,
     CampaignsModule,
     OrdersModule,
     ComplaintsModule,
+    ReferralsModule,
+    CartModule,
+    AdminModule,
+    RefundsModule,
+    HealthModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

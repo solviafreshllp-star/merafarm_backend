@@ -1,6 +1,8 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ComplaintStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateComplaintDto } from './dto/create-complaint.dto';
+import { ResolveComplaintDto } from './dto/resolve-complaint.dto';
 
 @Injectable()
 export class ComplaintsService {
@@ -25,6 +27,15 @@ export class ComplaintsService {
     return this.prisma.complaint.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async resolve(id: string, dto: ResolveComplaintDto) {
+    const complaint = await this.prisma.complaint.findUnique({ where: { id } });
+    if (!complaint) throw new NotFoundException('Complaint not found');
+    return this.prisma.complaint.update({
+      where: { id },
+      data: { status: ComplaintStatus.RESOLVED, resolutionNote: dto.resolutionNote, resolvedAt: new Date() },
     });
   }
 }

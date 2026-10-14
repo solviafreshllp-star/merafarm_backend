@@ -20,6 +20,12 @@ export class VerifyOtpDto {
   @IsOptional()
   @IsString()
   name?: string;
+
+  // Only applied on a first signup (ignored for an existing user's login) —
+  // attributes a JOINED referral event to the link that brought them in.
+  @IsOptional()
+  @IsString()
+  referralCode?: string;
 }
 
 export class PasswordLoginDto {

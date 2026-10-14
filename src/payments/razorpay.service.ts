@@ -7,9 +7,12 @@ export class RazorpayService {
   private client: Razorpay;
 
   constructor() {
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      throw new Error('RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET environment variables are not set');
+    }
     this.client = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID ?? "rzp_test_ow7rpYsN0vG2h1",
-      key_secret: process.env.RAZORPAY_KEY_SECRET ?? 'zyLyv8ITCd9g8yqXPwU0dDMd',
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
     });
   }
 

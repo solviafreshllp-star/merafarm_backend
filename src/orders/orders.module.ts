@@ -9,5 +9,6 @@ import { RazorpayService } from '../payments/razorpay.service';
   imports: [CampaignsModule, JobsModule],
   controllers: [OrdersController],
   providers: [OrdersService, RazorpayService],
+  exports: [OrdersService],
 })
 export class OrdersModule {}

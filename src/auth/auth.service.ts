@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as crypto from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { OtpService } from './otp.service';
 import { JwtPayload } from './jwt-payload';
@@ -21,9 +21,12 @@ export class AuthService {
   /**
    * Mirrors the prototype's sign-in/sign-up split: an existing phone number
    * logs the user straight in (no name re-asked); an unseen number creates
-   * an account using the provided name.
+   * an account using the provided name. An optional referralCode on a FIRST
+   * signup (never on an existing-user login) attributes a JOINED
+   * ReferralEvent to the referral link that brought them in — see TASKS.md
+   * 1.5 for why this is JOINED-on-signup rather than something else.
    */
-  async verifyOtp(phone: string, code: string, name?: string) {
+  async verifyOtp(phone: string, code: string, name?: string, referralCode?: string) {
     const ok = await this.otp.verifyOtp(phone, code);
     if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
 
@@ -34,8 +37,18 @@ export class AuthService {
         throw new BadRequestException('New number — a name is required to create an account');
       }
       user = await this.prisma.user.create({ data: { phone, name: name.trim() } });
+
+      if (referralCode) {
+        const link = await this.prisma.referralLink.findUnique({ where: { code: referralCode } });
+        if (link) {
+          await this.prisma.referralEvent.create({
+            data: { referralLinkId: link.id, type: 'JOINED', referredUserId: user.id },
+          });
+        }
+      }
     }
 
+    this.assertNotSuspended(user);
     return this.issueToken(user);
   }
 
@@ -44,30 +57,30 @@ export class AuthService {
     if (!user?.passwordHash) {
       throw new UnauthorizedException('No password set for this number — sign in with OTP instead');
     }
-    const hash = this.hashPassword(password);
-    if (hash !== user.passwordHash) throw new UnauthorizedException('Incorrect password');
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Incorrect password');
+    this.assertNotSuspended(user);
     return this.issueToken(user);
+  }
+
+  private assertNotSuspended(user: { isSuspended: boolean }) {
+    if (user.isSuspended) {
+      throw new UnauthorizedException('This account has been suspended. Contact support for help.');
+    }
   }
 
   /** Lets a logged-in (OTP-verified) user set a password for faster future logins. */
   async setPassword(userId: string, password: string) {
-    const passwordHash = this.hashPassword(password);
+    const passwordHash = await bcrypt.hash(password, 12);
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
     return { ok: true };
   }
 
-  private hashPassword(password: string): string {
-    // Placeholder only — swap for bcrypt/argon2 before this touches real
-    // passwords. Flagging explicitly rather than letting a plain SHA-256
-    // hash look production-ready.
-    return crypto.createHash('sha256').update(password).digest('hex');
-  }
-
-  private issueToken(user: { id: string; phone: string; isSeller: boolean; name: string }) {
-    const payload: JwtPayload = { sub: user.id, phone: user.phone, isSeller: user.isSeller };
+  private issueToken(user: { id: string; phone: string; isSeller: boolean; isAdmin: boolean; name: string }) {
+    const payload: JwtPayload = { sub: user.id, phone: user.phone, isSeller: user.isSeller, isAdmin: user.isAdmin };
     return {
       accessToken: this.jwt.sign(payload),
-      user: { id: user.id, name: user.name, phone: user.phone, isSeller: user.isSeller },
+      user: { id: user.id, name: user.name, phone: user.phone, isSeller: user.isSeller, isAdmin: user.isAdmin },
     };
   }
 }

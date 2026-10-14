@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { RefundsProcessor } from './refunds.processor';
+import { OrderExpiryService } from './order-expiry.service';
 import { RazorpayService } from '../payments/razorpay.service';
+import { CampaignsModule } from '../campaigns/campaigns.module';
 
 @Module({
   imports: [
+    CampaignsModule,
     BullModule.registerQueue({
       name: 'refunds',
       defaultJobOptions: {
@@ -13,7 +16,7 @@ import { RazorpayService } from '../payments/razorpay.service';
       },
     }),
   ],
-  providers: [RefundsProcessor, RazorpayService],
+  providers: [RefundsProcessor, OrderExpiryService, RazorpayService],
   exports: [BullModule],
 })
 export class JobsModule {}

@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -23,7 +24,21 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
 
-  const port = process.env.PORT ?? 4000;
+  // Not exposed in production by default — this is a docs/dev-ergonomics
+  // tool, and an unauthenticated public API surface map is worth gating
+  // the same way the admin/debug-leaning defaults in Phase 0 were.
+  if ((process.env.NODE_ENV ?? 'development') !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('MeraFarm API')
+      .setDescription('Campaigns, price-ladder pricing, orders, auth, referrals')
+      .setVersion('0.1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
+
+  const port = process.env.PORT ?? 4001;
   await app.listen(port);
   console.log(`MeraFarm API listening on http://localhost:${port}/api`);
 }
