@@ -18,7 +18,7 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string().required(),
   JWT_SECRET: secretPresence,
   JWT_EXPIRES_IN: Joi.string().default('30d'),
-  REDIS_HOST: Joi.string().default('localhost'),
+  REDIS_HOST: Joi.string().default('127.0.0.1'),
   REDIS_PORT: Joi.number().default(6379),
   RAZORPAY_KEY_ID: secretPresence,
   RAZORPAY_KEY_SECRET: secretPresence,

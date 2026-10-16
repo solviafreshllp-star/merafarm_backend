@@ -27,16 +27,22 @@ export class AuthService {
    * 1.5 for why this is JOINED-on-signup rather than something else.
    */
   async verifyOtp(phone: string, code: string, name?: string, referralCode?: string) {
+    // Check whether this request can even complete BEFORE consuming the
+    // OTP — `otp.verifyOtp()` deletes it on a correct match. If we checked
+    // the OTP first, a new number's first attempt (no name yet) would burn
+    // the code on a request that was always going to 400, and the
+    // frontend's follow-up "what's your name" retry with that same code
+    // would then fail as "invalid OTP" even though it was correct.
+    let user = await this.prisma.user.findUnique({ where: { phone } });
+    if (!user && !name?.trim()) {
+      throw new BadRequestException('New number — a name is required to create an account');
+    }
+
     const ok = await this.otp.verifyOtp(phone, code);
     if (!ok) throw new UnauthorizedException('Invalid or expired OTP');
 
-    let user = await this.prisma.user.findUnique({ where: { phone } });
-
     if (!user) {
-      if (!name?.trim()) {
-        throw new BadRequestException('New number — a name is required to create an account');
-      }
-      user = await this.prisma.user.create({ data: { phone, name: name.trim() } });
+      user = await this.prisma.user.create({ data: { phone, name: name!.trim() } });
 
       if (referralCode) {
         const link = await this.prisma.referralLink.findUnique({ where: { code: referralCode } });

@@ -1,4 +1,5 @@
-import { Body, Controller, Param, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { CampaignStatus } from '@prisma/client';
 import { CampaignsService } from '../campaigns/campaigns.service';
 import { AdminUpdateCampaignDto } from '../campaigns/dto/admin-update-campaign.dto';
 import { RejectCampaignDto } from './dto/reject-campaign.dto';
@@ -15,6 +16,14 @@ export class AdminCampaignsController {
     private readonly campaigns: CampaignsService,
     private readonly admin: AdminService,
   ) {}
+
+  /** Every campaign across every seller, optionally filtered by status —
+   *  the approval queue (`?status=PENDING_REVIEW`) and campaign management
+   *  (no filter) screens both use this. */
+  @Get()
+  list(@Query('status') status?: CampaignStatus) {
+    return this.campaigns.adminList({ status });
+  }
 
   @Patch(':id/approve')
   async approve(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

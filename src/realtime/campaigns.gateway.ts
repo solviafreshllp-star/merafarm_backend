@@ -28,7 +28,24 @@ export class CampaignsGateway {
     client.leave(roomFor(campaignId));
   }
 
-  broadcastCampaignUpdate(campaignId: string, payload: { bookedUnits: number; currentPrice: number; unitsToNextSlab: number | null }) {
+  /**
+   * Partial on purpose: a mere reservation (checkout started, not yet paid)
+   * only ever changes `unitsLeft`; `bookedUnits`/`currentPrice`/
+   * `unitsToNextSlab`/`nextSlabPrice` are confirmed-sales numbers and only
+   * change once an order is actually CONFIRMED (see
+   * CampaignsService.broadcastState vs. reserveUnits). Clients should merge
+   * whatever fields are present rather than assuming the full shape.
+   */
+  broadcastCampaignUpdate(
+    campaignId: string,
+    payload: Partial<{
+      bookedUnits: number;
+      currentPrice: number;
+      unitsToNextSlab: number | null;
+      nextSlabPrice: number | null;
+      unitsLeft: number;
+    }>,
+  ) {
     this.server.to(roomFor(campaignId)).emit('campaign:update', { campaignId, ...payload });
   }
 }

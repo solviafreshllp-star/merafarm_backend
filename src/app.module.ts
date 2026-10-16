@@ -25,7 +25,7 @@ import { envValidationSchema } from './config/env.validation';
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]), // sane default; auth endpoints tighten this further
     BullModule.forRoot({
       connection: {
-        host: process.env.REDIS_HOST ?? 'localhost',
+        host: process.env.REDIS_HOST ?? '127.0.0.1',
         port: Number(process.env.REDIS_PORT ?? 6379),
       },
     }),

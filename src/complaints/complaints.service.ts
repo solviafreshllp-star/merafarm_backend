@@ -30,6 +30,34 @@ export class ComplaintsService {
     });
   }
 
+  /**
+   * Admin-facing search across every buyer's complaints — by complaint id
+   * (exact) or the complaining user's name/phone (contains, case-
+   * insensitive for name), optionally narrowed by status.
+   */
+  async adminList(params: { q?: string; status?: ComplaintStatus }) {
+    const q = params.q?.trim();
+    return this.prisma.complaint.findMany({
+      where: {
+        ...(params.status ? { status: params.status } : {}),
+        ...(q
+          ? {
+              OR: [
+                { id: q },
+                { user: { name: { contains: q, mode: 'insensitive' } } },
+                { user: { phone: { contains: q } } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+        order: { select: { orderNumber: true, campaign: { select: { productName: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async resolve(id: string, dto: ResolveComplaintDto) {
     const complaint = await this.prisma.complaint.findUnique({ where: { id } });
     if (!complaint) throw new NotFoundException('Complaint not found');

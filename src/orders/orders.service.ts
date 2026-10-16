@@ -122,7 +122,12 @@ export class OrdersService {
     });
     if (!campaign) return;
 
-    const nowPrice = currentPrice(campaign.slabs, campaign.bookedUnits);
+    // Confirmed-units basis, not the raw reservation counter — see
+    // CampaignsService.confirmedUnitsFor's doc comment. This is also the
+    // exact moment the publicly-shown price/booked-count should move, so
+    // broadcast it now rather than only at reservation time.
+    const confirmedUnits = await this.campaigns.confirmedUnitsFor(campaignId);
+    const nowPrice = currentPrice(campaign.slabs, confirmedUnits);
 
     const confirmedOrders = await this.prisma.order.findMany({
       where: { campaignId, status: OrderStatus.CONFIRMED, unitPriceCharged: { gt: nowPrice } },
@@ -146,5 +151,10 @@ export class OrdersService {
 
       await this.refundsQueue.add('process-refund', { refundId: refund.id });
     }
+
+    // Push the real price change to clients now — this is the moment it
+    // actually happened, not when some earlier checkout merely reserved
+    // units (see CampaignsService.reserveUnits vs. broadcastState).
+    await this.campaigns.broadcastState(campaignId);
   }
 }

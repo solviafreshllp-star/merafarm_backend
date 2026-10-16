@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Campaign, CampaignStatus, Prisma, PriceSlab } from '@prisma/client';
+import { Campaign, CampaignStatus, OrderStatus, Prisma, PriceSlab } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCapDto } from './dto/update-cap.dto';
@@ -51,10 +51,11 @@ export class CampaignsService {
         status: CampaignStatus.LIVE,
         ...(params.city ? { scopeCity: params.city } : {}),
       },
-      include: { slabs: true },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
-    return campaigns.map((c) => this.toSummary(c));
+    const confirmed = await this.confirmedUnitsForMany(campaigns.map((c) => c.id));
+    return campaigns.map((c) => this.toSummary(c, confirmed[c.id] ?? 0));
   }
 
   async findOne(id: string) {
@@ -63,17 +64,20 @@ export class CampaignsService {
       include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
     if (!campaign) throw new NotFoundException('Campaign not found');
-    return this.toDetail(campaign);
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(campaign, confirmedUnits);
   }
 
   /** Editable any time — including after the campaign has gone live. */
   async updateCap(id: string, sellerId: string, dto: UpdateCapDto) {
     const campaign = await this.requireOwnedCampaign(id, sellerId);
-    return this.prisma.campaign.update({
+    const updated = await this.prisma.campaign.update({
       where: { id: campaign.id },
       data: { capUnits: dto.capUnits },
-      include: { slabs: true },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(updated, confirmedUnits);
   }
 
   /**
@@ -88,20 +92,44 @@ export class CampaignsService {
     if (campaign.status !== CampaignStatus.DRAFT) {
       throw new ForbiddenException('Only a draft campaign can be submitted for review');
     }
-    return this.prisma.campaign.update({
+    const updated = await this.prisma.campaign.update({
       where: { id: campaign.id },
       data: { status: CampaignStatus.PENDING_REVIEW, rejectionReason: null },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(updated, confirmedUnits);
   }
 
   /** Seller's own campaigns across every status — the seller dashboard list. */
   async findMine(sellerId: string) {
     const campaigns = await this.prisma.campaign.findMany({
       where: { sellerId },
-      include: { slabs: true },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
-    return campaigns.map((c) => this.toDetail(c));
+    const confirmed = await this.confirmedUnitsForMany(campaigns.map((c) => c.id));
+    return campaigns.map((c) => this.toDetail(c, confirmed[c.id] ?? 0));
+  }
+
+  /**
+   * Admin-facing listing across EVERY seller, optionally filtered by
+   * status — the campaign approval queue (`status=PENDING_REVIEW`) and the
+   * campaign management screen (no filter) both key off this. Includes the
+   * seller's own contact details since an admin reviewing/overriding a
+   * campaign usually needs to know whose it is.
+   */
+  async adminList(params: { status?: CampaignStatus } = {}) {
+    const campaigns = await this.prisma.campaign.findMany({
+      where: { ...(params.status ? { status: params.status } : {}) },
+      include: {
+        slabs: { orderBy: { fromQty: 'asc' } },
+        seller: { select: { id: true, name: true, phone: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const confirmed = await this.confirmedUnitsForMany(campaigns.map((c) => c.id));
+    return campaigns.map((c) => this.toDetail(c, confirmed[c.id] ?? 0));
   }
 
   /** Orders against one of the seller's own campaigns — the fulfillment view. */
@@ -120,7 +148,13 @@ export class CampaignsService {
     if (campaign.status !== CampaignStatus.PENDING_REVIEW) {
       throw new ForbiddenException('Only a campaign pending review can be approved');
     }
-    return this.prisma.campaign.update({ where: { id }, data: { status: CampaignStatus.LIVE } });
+    const updated = await this.prisma.campaign.update({
+      where: { id },
+      data: { status: CampaignStatus.LIVE },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
+    });
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(updated, confirmedUnits);
   }
 
   /** Reverts to DRAFT (not a dead-end REJECTED status) so the seller can edit and resubmit. */
@@ -133,6 +167,7 @@ export class CampaignsService {
     const updated = await this.prisma.campaign.update({
       where: { id },
       data: { status: CampaignStatus.DRAFT, rejectionReason: reason },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
     await this.notifications.notify(
       campaign.sellerId,
@@ -140,7 +175,8 @@ export class CampaignsService {
       'Your campaign needs changes',
       `"${campaign.productName}" was sent back to drafts: ${reason}`,
     );
-    return updated;
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(updated, confirmedUnits);
   }
 
   /**
@@ -153,7 +189,7 @@ export class CampaignsService {
     const campaign = await this.prisma.campaign.findUnique({ where: { id } });
     if (!campaign) throw new NotFoundException('Campaign not found');
 
-    return this.prisma.campaign.update({
+    const updated = await this.prisma.campaign.update({
       where: { id },
       data: {
         ...(dto.productName !== undefined && { productName: dto.productName }),
@@ -175,8 +211,10 @@ export class CampaignsService {
           },
         }),
       },
-      include: { slabs: true },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(updated, confirmedUnits);
   }
 
   /**
@@ -203,12 +241,11 @@ export class CampaignsService {
     // Broadcast only after the transaction has actually committed — doing
     // this inside the transaction callback would fire the event before the
     // write is durable, so a client could see a "live" update for a change
-    // that then rolls back.
-    const info = nextSlabInfo(result.updated.slabs, result.updated.bookedUnits);
+    // that then rolls back. A mere reservation never moves the
+    // confirmed-based price shown to buyers (see broadcastState) — the only
+    // thing that genuinely changes here is remaining capacity.
     this.gateway.broadcastCampaignUpdate(campaignId, {
-      bookedUnits: result.updated.bookedUnits,
-      currentPrice: currentPrice(result.updated.slabs, result.updated.bookedUnits),
-      unitsToNextSlab: info.unitsToNextSlab,
+      unitsLeft: result.updated.capUnits - result.updated.bookedUnits,
     });
 
     return { campaign: result.campaign, unitPrice: result.unitPrice };
@@ -224,12 +261,20 @@ export class CampaignsService {
       throw new ForbiddenException('This campaign is not currently accepting orders');
     }
 
+    // Capacity check stays reserved-based (campaign.bookedUnits, bumped
+    // immediately below) — this is what actually prevents overselling.
+    // Keeping it separate from the CONFIRMED-only count used for pricing
+    // (confirmedUnitsFor) is the whole point of this split: a buyer who
+    // merely starts checkout and abandons it must not be able to oversell
+    // the cap, but also must not move the price everyone else sees until
+    // they actually pay — see TASKS.md / the 2026-10-17 fix note.
     const remaining = campaign.capUnits - campaign.bookedUnits;
     if (remaining < quantity) {
       throw new ForbiddenException(`Only ${remaining} ${campaign.unitLabel} left in this campaign`);
     }
 
-    const unitPrice = chargePriceFor(campaign.slabs, campaign.bookedUnits, quantity, campaign.capUnits);
+    const confirmedBefore = await this.confirmedUnitsFor(campaignId, tx);
+    const unitPrice = chargePriceFor(campaign.slabs, confirmedBefore, quantity, campaign.capUnits);
 
     const updated = await tx.campaign.update({
       where: { id: campaignId },
@@ -241,11 +286,11 @@ export class CampaignsService {
   }
 
   /**
-   * Re-reads a campaign's current state and pushes it over the socket —
-   * used by callers that mutate bookedUnits themselves inside their own
-   * transaction (e.g. jobs/order-expiry.service.ts releasing an expired
-   * reservation alongside an order/group status update) and just need the
-   * post-commit broadcast this service normally does for them.
+   * Re-reads a campaign's CONFIRMED-sales state and pushes it over the
+   * socket — this is the thing that should fire right after an order is
+   * actually paid for (see OrdersService.reconcileRefundsForCampaign, which
+   * calls this), not when someone merely starts checkout. Also used by
+   * jobs/order-expiry.service.ts after releasing an expired reservation.
    */
   async broadcastState(campaignId: string) {
     const campaign = await this.prisma.campaign.findUnique({
@@ -253,11 +298,14 @@ export class CampaignsService {
       include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
     if (!campaign) return;
-    const info = nextSlabInfo(campaign.slabs, campaign.bookedUnits);
+    const confirmedUnits = await this.confirmedUnitsFor(campaignId);
+    const info = nextSlabInfo(campaign.slabs, confirmedUnits);
     this.gateway.broadcastCampaignUpdate(campaignId, {
-      bookedUnits: campaign.bookedUnits,
-      currentPrice: currentPrice(campaign.slabs, campaign.bookedUnits),
+      bookedUnits: confirmedUnits,
+      currentPrice: currentPrice(campaign.slabs, confirmedUnits),
       unitsToNextSlab: info.unitsToNextSlab,
+      nextSlabPrice: info.nextSlab?.price ?? null,
+      unitsLeft: campaign.capUnits - campaign.bookedUnits,
     });
   }
 
@@ -267,10 +315,13 @@ export class CampaignsService {
 
   async addMediaUrl(id: string, sellerId: string, url: string) {
     const campaign = await this.requireOwnedCampaign(id, sellerId);
-    return this.prisma.campaign.update({
+    const updated = await this.prisma.campaign.update({
       where: { id: campaign.id },
       data: { mediaUrls: { push: url } },
+      include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
+    const confirmedUnits = await this.confirmedUnitsFor(id);
+    return this.toDetail(updated, confirmedUnits);
   }
 
   private async requireOwnedCampaign(id: string, sellerId: string) {
@@ -280,31 +331,81 @@ export class CampaignsService {
     return campaign;
   }
 
+  /**
+   * Sum of `quantity` across every CONFIRMED (actually paid) order on a
+   * campaign — the basis for every price/slab number shown to buyers and
+   * for what a NEW order gets quoted (see reserveUnitsInTx above). Deliberately
+   * NOT the same as campaign.bookedUnits, which also includes units merely
+   * reserved by an in-flight, unpaid checkout (see TASKS.md 2026-10-17 note:
+   * a buyer abandoning checkout was inflating the publicly-shown "booked"
+   * count and price before this split existed).
+   */
+  async confirmedUnitsFor(campaignId: string, client: PrismaService | TxClient = this.prisma): Promise<number> {
+    const agg = await client.order.aggregate({
+      where: { campaignId, status: OrderStatus.CONFIRMED },
+      _sum: { quantity: true },
+    });
+    return agg._sum.quantity ?? 0;
+  }
+
+  private async confirmedUnitsForMany(campaignIds: string[]): Promise<Record<string, number>> {
+    if (campaignIds.length === 0) return {};
+    const groups = await this.prisma.order.groupBy({
+      by: ['campaignId'],
+      where: { campaignId: { in: campaignIds }, status: OrderStatus.CONFIRMED },
+      _sum: { quantity: true },
+    });
+    const map: Record<string, number> = {};
+    for (const g of groups) map[g.campaignId] = g._sum.quantity ?? 0;
+    return map;
+  }
+
   /** Compact shape for listing cards — mirrors gbCardHTML() in the prototype. */
-  private toSummary(campaign: CampaignWithSlabs) {
-    const info = nextSlabInfo(campaign.slabs, campaign.bookedUnits);
+  private toSummary(campaign: CampaignWithSlabs, confirmedUnits: number) {
+    const info = nextSlabInfo(campaign.slabs, confirmedUnits);
     return {
       id: campaign.id,
       productName: campaign.productName,
       farmName: campaign.farmName,
       unitLabel: campaign.unitLabel,
       status: campaign.status,
-      bookedUnits: campaign.bookedUnits,
+      // Confirmed (paid) units, not the raw reservation counter — see
+      // confirmedUnitsFor's doc comment.
+      bookedUnits: confirmedUnits,
       capUnits: campaign.capUnits,
-      currentPrice: currentPrice(campaign.slabs, campaign.bookedUnits),
+      currentPrice: currentPrice(campaign.slabs, confirmedUnits),
       unitsToNextSlab: info.unitsToNextSlab,
       nextSlabPrice: info.nextSlab?.price ?? null,
       endAt: campaign.endAt,
       scopeLabel: this.scopeLabel(campaign),
+      mediaUrls: campaign.mediaUrls,
+      // Exposed so cards can compute a live preview of what the viewer's
+      // OWN pending cart quantity would unlock, the same way the detail
+      // page and checkout already do — see pricingPreview.ts on the
+      // frontend. Already loaded for this request either way (used just
+      // above for currentPrice/nextSlabPrice), so this is free.
+      slabs: campaign.slabs,
+      // Reservation-based (raw campaign.bookedUnits, NOT confirmedUnits) —
+      // "can a buyer still add this to their cart right now," same
+      // distinction toDetail() makes. A card using confirmedUnits here
+      // would stay "available" even after every unit was already reserved
+      // by other in-flight checkouts.
+      unitsLeft: campaign.capUnits - campaign.bookedUnits,
     };
   }
 
   /** Full shape for the product/detail page. */
-  private toDetail(campaign: CampaignWithSlabs) {
-    const info = nextSlabInfo(campaign.slabs, campaign.bookedUnits);
+  private toDetail(campaign: CampaignWithSlabs, confirmedUnits: number) {
+    const info = nextSlabInfo(campaign.slabs, confirmedUnits);
     return {
       ...campaign,
-      currentPrice: currentPrice(campaign.slabs, campaign.bookedUnits),
+      // Confirmed (paid) units override the raw DB field — see
+      // confirmedUnitsFor's doc comment. unitsLeft stays reserved-based
+      // (campaign.bookedUnits, from the spread above) since that's a
+      // genuinely different question: "how much is still available to
+      // reserve right now" vs. "how much has actually sold."
+      bookedUnits: confirmedUnits,
+      currentPrice: currentPrice(campaign.slabs, confirmedUnits),
       unitsLeft: campaign.capUnits - campaign.bookedUnits,
       isLastSlab: info.isLast,
       unitsToNextSlab: info.unitsToNextSlab,

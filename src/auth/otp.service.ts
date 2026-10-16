@@ -24,7 +24,7 @@ import Redis from 'ioredis';
 export class OtpService implements OnModuleDestroy {
   private readonly logger = new Logger(OtpService.name);
   private readonly redis = new Redis({
-    host: process.env.REDIS_HOST ?? 'localhost',
+    host: process.env.REDIS_HOST ?? '127.0.0.1',
     port: Number(process.env.REDIS_PORT ?? 6379),
     connectTimeout: 1000,
     maxRetriesPerRequest: 1,

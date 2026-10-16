@@ -1,11 +1,15 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { CampaignStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { CampaignsService } from '../campaigns/campaigns.service';
 import { currentPrice } from '../campaigns/pricing.util';
 
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly campaigns: CampaignsService,
+  ) {}
 
   private async getOrCreateCart(userId: string) {
     const existing = await this.prisma.cart.findUnique({ where: { userId } });
@@ -21,20 +25,26 @@ export class CartService {
       orderBy: { createdAt: 'asc' },
     });
 
-    const lines = items.map((item) => {
-      const unitPrice = currentPrice(item.campaign.slabs, item.campaign.bookedUnits);
-      return {
-        campaignId: item.campaignId,
-        productName: item.campaign.productName,
-        farmName: item.campaign.farmName,
-        unitLabel: item.campaign.unitLabel,
-        quantity: item.quantity,
-        unitPrice,
-        lineTotal: unitPrice * item.quantity,
-        campaignStatus: item.campaign.status,
-        unitsLeft: item.campaign.capUnits - item.campaign.bookedUnits,
-      };
-    });
+    const lines = await Promise.all(
+      items.map(async (item) => {
+        // Confirmed-units basis — matches what checkout will actually
+        // charge (see CampaignsService.reserveUnitsInTx), not the raw
+        // reservation counter other carts may be temporarily holding.
+        const confirmedUnits = await this.campaigns.confirmedUnitsFor(item.campaignId);
+        const unitPrice = currentPrice(item.campaign.slabs, confirmedUnits);
+        return {
+          campaignId: item.campaignId,
+          productName: item.campaign.productName,
+          farmName: item.campaign.farmName,
+          unitLabel: item.campaign.unitLabel,
+          quantity: item.quantity,
+          unitPrice,
+          lineTotal: unitPrice * item.quantity,
+          campaignStatus: item.campaign.status,
+          unitsLeft: item.campaign.capUnits - item.campaign.bookedUnits,
+        };
+      }),
+    );
 
     return { items: lines, total: lines.reduce((sum, l) => sum + l.lineTotal, 0) };
   }

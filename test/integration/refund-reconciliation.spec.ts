@@ -34,7 +34,10 @@ describe('OrdersService.reconcileRefundsForCampaign', () => {
     buyerId = buyer.id;
     userIds.push(seller.id, buyer.id);
 
-    const campaign = await createLiveCampaign(prisma, sellerId, tag, { bookedUnits: 15, capUnits: 100 });
+    // bookedUnits (the reservation counter) is irrelevant to pricing now —
+    // only CONFIRMED order quantities drive currentPrice (see
+    // CampaignsService.confirmedUnitsFor). Leave it at the fixture default.
+    const campaign = await createLiveCampaign(prisma, sellerId, tag, { capUnits: 100 });
     campaignId = campaign.id;
     campaignIds.push(campaign.id);
   });
@@ -45,7 +48,7 @@ describe('OrdersService.reconcileRefundsForCampaign', () => {
   });
 
   it('tops up a refund for an order that paid more than the current unlocked price', async () => {
-    // This order was charged the ₹1000 tier (booked was below 10 when it was placed).
+    // This order was charged the ₹1000 tier (confirmed total was below 10 when it was placed).
     const order = await prisma.order.create({
       data: {
         orderNumber: `ORDTEST${tag}1`,
@@ -63,9 +66,27 @@ describe('OrdersService.reconcileRefundsForCampaign', () => {
       },
     });
 
-    // Campaign is now at 15 booked units -> current price is ₹800 (crossed
-    // the 10-unit slab after this order was placed) — reconciliation should
-    // refund (1000 - 800) * 5 = 1000.
+    // A second buyer's order then gets CONFIRMED too, bringing the
+    // campaign's CONFIRMED total to 15 units -> current price drops to
+    // ₹800 (crossed the 10-unit slab). Reconciliation should top up order A
+    // by (1000 - 800) * 5 = 1000.
+    await prisma.order.create({
+      data: {
+        orderNumber: `ORDTEST${tag}2`,
+        userId: buyerId,
+        campaignId,
+        quantity: 10,
+        unitPriceCharged: 800,
+        amount: 8000,
+        status: OrderStatus.CONFIRMED,
+        addressCity: 'TestCity',
+        addressPincode: '100000',
+        addressLocality: 'TestLocality',
+        addressSociety: 'TestSociety',
+        addressFlat: 'A-2',
+      },
+    });
+
     await orders.reconcileRefundsForCampaign(campaignId);
 
     const refunds = await prisma.refund.findMany({ where: { orderId: order.id } });
