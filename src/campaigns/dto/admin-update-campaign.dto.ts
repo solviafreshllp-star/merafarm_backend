@@ -30,6 +30,8 @@ export class AdminUpdateCampaignDto {
 
   @IsOptional() @IsDateString() startAt?: string;
   @IsOptional() @IsDateString() endAt?: string;
+  @IsOptional() @IsDateString() deliveryStartAt?: string;
+  @IsOptional() @IsDateString() deliveryEndAt?: string;
 
   @IsOptional()
   @IsArray()

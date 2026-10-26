@@ -55,6 +55,15 @@ export class CreateCampaignDto {
   @IsDateString()
   endAt: string;
 
+  /** When the produce actually reaches buyers — a separate date range from
+   *  the preorder window above, typically right after `endAt` once the
+   *  farmer harvests/packs. */
+  @IsDateString()
+  deliveryStartAt: string;
+
+  @IsDateString()
+  deliveryEndAt: string;
+
   @IsArray()
   @ArrayMinSize(1, { message: 'A campaign needs at least one price slab' })
   @ValidateNested({ each: true })

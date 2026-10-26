@@ -38,6 +38,8 @@ export class CampaignsService {
         capUnits: dto.capUnits,
         startAt: new Date(dto.startAt),
         endAt: new Date(dto.endAt),
+        deliveryStartAt: new Date(dto.deliveryStartAt),
+        deliveryEndAt: new Date(dto.deliveryEndAt),
         status: CampaignStatus.DRAFT,
         slabs: { create: sortedSlabs },
       },
@@ -45,10 +47,21 @@ export class CampaignsService {
     });
   }
 
+  /**
+   * The public listing — only campaigns actually open for ordering RIGHT
+   * NOW: `status = LIVE` is necessary but not sufficient, since a campaign
+   * keeps that status after its own `endAt` passes (nothing flips it back)
+   * and before its `startAt` arrives. Buyers should never see an expired
+   * or not-yet-open campaign in Home/Campaigns — that's what this extra
+   * time-window filter is for.
+   */
   async findLive(params: { city?: string; category?: string } = {}) {
+    const now = new Date();
     const campaigns = await this.prisma.campaign.findMany({
       where: {
         status: CampaignStatus.LIVE,
+        startAt: { lte: now },
+        endAt: { gt: now },
         ...(params.city ? { scopeCity: params.city } : {}),
       },
       include: { slabs: { orderBy: { fromQty: 'asc' } } },
@@ -204,6 +217,8 @@ export class CampaignsService {
         ...(dto.capUnits !== undefined && { capUnits: dto.capUnits }),
         ...(dto.startAt !== undefined && { startAt: new Date(dto.startAt) }),
         ...(dto.endAt !== undefined && { endAt: new Date(dto.endAt) }),
+        ...(dto.deliveryStartAt !== undefined && { deliveryStartAt: new Date(dto.deliveryStartAt) }),
+        ...(dto.deliveryEndAt !== undefined && { deliveryEndAt: new Date(dto.deliveryEndAt) }),
         ...(dto.slabs !== undefined && {
           slabs: {
             deleteMany: {},
@@ -259,6 +274,14 @@ export class CampaignsService {
     if (!campaign) throw new NotFoundException('Campaign not found');
     if (campaign.status !== CampaignStatus.LIVE) {
       throw new ForbiddenException('This campaign is not currently accepting orders');
+    }
+    const now = new Date();
+    if (now < campaign.startAt || now >= campaign.endAt) {
+      // Mirrors findLive()'s listing filter — `status = LIVE` alone doesn't
+      // mean "open right now," since nothing flips the status back once
+      // endAt passes. Without this, a buyer with a stale/bookmarked link to
+      // a campaign that's no longer publicly listed could still check out.
+      throw new ForbiddenException('This campaign’s preorder window is not currently open');
     }
 
     // Capacity check stays reserved-based (campaign.bookedUnits, bumped
@@ -376,7 +399,16 @@ export class CampaignsService {
       currentPrice: currentPrice(campaign.slabs, confirmedUnits),
       unitsToNextSlab: info.unitsToNextSlab,
       nextSlabPrice: info.nextSlab?.price ?? null,
+      // Preorder window — so the listing card can run the same live
+      // countdown the detail page does, not just show a bare end date.
+      startAt: campaign.startAt,
       endAt: campaign.endAt,
+      // Delivery window — a separate date range from the preorder window
+      // above (see the Campaign model's doc comment): when the produce
+      // actually reaches buyers. Null for campaigns created before this
+      // field existed.
+      deliveryStartAt: campaign.deliveryStartAt,
+      deliveryEndAt: campaign.deliveryEndAt,
       scopeLabel: this.scopeLabel(campaign),
       mediaUrls: campaign.mediaUrls,
       // Exposed so cards can compute a live preview of what the viewer's

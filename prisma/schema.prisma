@@ -127,8 +127,16 @@ model Campaign {
 
   status          CampaignStatus @default(DRAFT)
   rejectionReason String? // set when an admin rejects a PENDING_REVIEW campaign; surfaced to the seller via Notification
-  startAt         DateTime
-  endAt           DateTime
+  startAt         DateTime // preorder window: orders can be placed from here...
+  endAt           DateTime // ...until here (booking also closes automatically once capUnits is reserved)
+
+  // Delivery window: when the physical produce actually reaches buyers —
+  // a separate date range from the preorder window above, set by the
+  // seller (typically right after endAt, once the farmer harvests/packs).
+  // Nullable so existing campaigns created before this field existed don't
+  // break; the seller builder treats both as required for new campaigns.
+  deliveryStartAt DateTime?
+  deliveryEndAt   DateTime?
 
   sellerId String
   seller   User   @relation("CampaignSeller", fields: [sellerId], references: [id])

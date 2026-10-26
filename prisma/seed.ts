@@ -32,6 +32,10 @@ async function main() {
   const now = new Date();
   const start = new Date(now.getTime() - 3 * 60 * 60 * 1000);
   const end = new Date(now.getTime() + (1 * 24 + 14) * 60 * 60 * 1000);
+  // Delivery window: a separate date range from the preorder window above —
+  // typically starts right after the preorder closes, once harvested/packed.
+  const deliveryStart = new Date(end.getTime() + 1 * 24 * 60 * 60 * 1000);
+  const deliveryEnd = new Date(end.getTime() + 4 * 24 * 60 * 60 * 1000);
 
   const campaign = await prisma.campaign.create({
     data: {
@@ -51,6 +55,8 @@ async function main() {
       status: CampaignStatus.LIVE,
       startAt: start,
       endAt: end,
+      deliveryStartAt: deliveryStart,
+      deliveryEndAt: deliveryEnd,
       slabs: {
         create: [
           { fromQty: 1, price: 2000 },
