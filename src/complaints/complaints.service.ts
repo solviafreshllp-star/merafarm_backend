@@ -35,10 +35,11 @@ export class ComplaintsService {
    * (exact) or the complaining user's name/phone (contains, case-
    * insensitive for name), optionally narrowed by status.
    */
-  async adminList(params: { q?: string; status?: ComplaintStatus }) {
+  async adminList(params: { q?: string; status?: ComplaintStatus; userId?: string }) {
     const q = params.q?.trim();
     return this.prisma.complaint.findMany({
       where: {
+        ...(params.userId ? { userId: params.userId } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(q
           ? {
@@ -52,7 +53,7 @@ export class ComplaintsService {
       },
       include: {
         user: { select: { id: true, name: true, phone: true } },
-        order: { select: { orderNumber: true, campaign: { select: { productName: true } } } },
+        order: { select: { orderNumber: true, amount: true, campaign: { select: { productName: true } } } },
       },
       orderBy: { createdAt: 'desc' },
     });

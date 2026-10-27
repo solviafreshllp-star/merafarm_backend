@@ -103,6 +103,11 @@ model Address {
   landmark  String?
   note      String?
   isDefault Boolean  @default(false)
+  // Map pin captured by an admin against this address (e.g. from a support
+  // call) — a Google Maps link pastes down to this lat/lng pair, which is
+  // what's actually stored; the link itself isn't kept.
+  lat       Float?
+  lng       Float?
   createdAt DateTime @default(now())
 
   @@index([userId])
@@ -191,6 +196,11 @@ model Order {
   addressWing     String?
   addressLandmark String?
   deliveryNote    String?
+  // Map pin the buyer captured at checkout (current-location tap or a
+  // pasted Google Maps link) — always buyer-supplied, never locked by the
+  // campaign's scope the way city/pincode/locality/society are.
+  lat             Float?
+  lng             Float?
 
   referralLinkId String?
   referralLink   ReferralLink? @relation(fields: [referralLinkId], references: [id])

@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsLatitude, IsLongitude, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateOrderDto {
   @IsString()
@@ -26,6 +26,10 @@ export class CreateOrderDto {
   @IsOptional() @IsString() wing?: string;
   @IsOptional() @IsString() landmark?: string;
   @IsOptional() @IsString() deliveryNote?: string;
+
+  // Map pin captured at checkout — see address-scope.util.ts's BuyerAddressInput.
+  @IsOptional() @IsLatitude() lat?: number;
+  @IsOptional() @IsLongitude() lng?: number;
 
   @IsOptional() @IsString() referralCode?: string;
 }

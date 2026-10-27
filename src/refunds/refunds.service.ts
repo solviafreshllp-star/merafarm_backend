@@ -22,11 +22,16 @@ export class RefundsService {
   }
 
   /** Admin-facing — every refund on the platform, optionally filtered. */
-  async adminList(params: { status?: RefundStatus; campaignId?: string }) {
+  async adminList(params: { status?: RefundStatus; campaignId?: string; userId?: string }) {
     return this.prisma.refund.findMany({
       where: {
         ...(params.status && { status: params.status }),
-        ...(params.campaignId && { order: { campaignId: params.campaignId } }),
+        ...((params.campaignId || params.userId) && {
+          order: {
+            ...(params.campaignId && { campaignId: params.campaignId }),
+            ...(params.userId && { userId: params.userId }),
+          },
+        }),
       },
       include: { order: { include: { campaign: true, user: { select: { id: true, name: true, phone: true } } } } },
       orderBy: { createdAt: 'desc' },

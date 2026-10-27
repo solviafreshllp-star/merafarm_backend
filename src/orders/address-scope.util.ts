@@ -19,6 +19,8 @@ export interface BuyerAddressInput {
   wing?: string;
   landmark?: string;
   deliveryNote?: string;
+  lat?: number;
+  lng?: number;
 }
 
 export interface ResolvedAddress {
@@ -30,6 +32,8 @@ export interface ResolvedAddress {
   addressWing?: string;
   addressLandmark?: string;
   deliveryNote?: string;
+  lat?: number;
+  lng?: number;
 }
 
 /**
@@ -74,5 +78,7 @@ export function resolveOrderAddress(campaign: Campaign, buyer: BuyerAddressInput
     addressWing: buyer.wing,
     addressLandmark: buyer.landmark,
     deliveryNote: buyer.deliveryNote,
+    lat: buyer.lat,
+    lng: buyer.lng,
   };
 }

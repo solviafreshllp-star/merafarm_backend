@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsLatitude, IsLongitude, IsOptional, IsString, ValidateNested } from 'class-validator';
 
 /**
  * One address for the whole cart. Which fields are actually required
@@ -18,6 +18,11 @@ export class CheckoutAddressDto {
   @IsOptional() @IsString() wing?: string;
   @IsOptional() @IsString() landmark?: string;
   @IsOptional() @IsString() deliveryNote?: string;
+
+  // Map pin captured at checkout (current-location tap or a pasted Google
+  // Maps link) — always optional, never locked by campaign scope.
+  @IsOptional() @IsLatitude() lat?: number;
+  @IsOptional() @IsLongitude() lng?: number;
 }
 
 export class CheckoutDto {
