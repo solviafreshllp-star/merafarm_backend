@@ -1,6 +1,5 @@
 import { PrismaClient, OrderStatus } from '@prisma/client';
 import { CampaignsService } from '../../src/campaigns/campaigns.service';
-import { OrdersService } from '../../src/orders/orders.service';
 import { CheckoutService } from '../../src/cart/checkout.service';
 import { createSeller, createBuyer, createLiveCampaign, cleanupTag, uniqueTag } from './fixtures';
 
@@ -26,9 +25,7 @@ describe('price/slab display reflects CONFIRMED sales only, not pending reservat
     createOrder: jest.fn().mockResolvedValue({ id: 'order_test_mock' }),
     verifyPaymentSignature: jest.fn().mockReturnValue(true),
   } as any;
-  const refundsQueue = { add: jest.fn() } as any;
-  const orders = new OrdersService(prisma as any, campaigns, razorpay, refundsQueue);
-  const checkout = new CheckoutService(prisma as any, campaigns, orders, razorpay);
+  const checkout = new CheckoutService(prisma as any, campaigns, razorpay);
 
   let buyerId: string;
   let campaignId: string;
@@ -78,7 +75,7 @@ describe('price/slab display reflects CONFIRMED sales only, not pending reservat
       where: { id: pendingOrder.id },
       data: { status: OrderStatus.CONFIRMED, paymentRef: 'pay_test_mock' },
     });
-    await orders.reconcileRefundsForCampaign(campaignId);
+    await campaigns.broadcastState(campaignId);
 
     // Only NOW does the public view move — crossed the 10-unit slab -> ₹800.
     const afterConfirm = await campaigns.findOne(campaignId);

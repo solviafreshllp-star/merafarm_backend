@@ -2,7 +2,6 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CampaignsService } from '../campaigns/campaigns.service';
-import { OrdersService } from '../orders/orders.service';
 import { RazorpayService } from '../payments/razorpay.service';
 import { resolveOrderAddress } from '../orders/address-scope.util';
 import { CheckoutDto, ConfirmCheckoutDto } from './dto/checkout.dto';
@@ -12,7 +11,6 @@ export class CheckoutService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly campaigns: CampaignsService,
-    private readonly orders: OrdersService,
     private readonly razorpay: RazorpayService,
   ) {}
 
@@ -113,11 +111,14 @@ export class CheckoutService {
       await tx.orderGroup.update({ where: { id: group.id }, data: { status: OrderStatus.CONFIRMED } });
     });
 
-    // Refund reconciliation is per-order/per-campaign (unchanged) — the
-    // group is only the checkout/payment unit, not the refund unit.
+    // Refunds are settled once, in a lump sum, when each campaign's
+    // preorder window closes (see OrdersService.finalizeRefundsForCampaign)
+    // — not here on every confirm — so just keep the live price/booked-count
+    // ticker in sync for buyers still browsing. The group is only the
+    // checkout/payment unit; refunds stay scoped per campaign regardless.
     const campaignIds = [...new Set(group.orders.map((o) => o.campaignId))];
     for (const campaignId of campaignIds) {
-      await this.orders.reconcileRefundsForCampaign(campaignId);
+      await this.campaigns.broadcastState(campaignId);
     }
 
     return this.prisma.orderGroup.findUnique({ where: { id: group.id }, include: { orders: true } });

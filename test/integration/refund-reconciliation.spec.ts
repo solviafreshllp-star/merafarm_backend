@@ -4,14 +4,15 @@ import { CampaignsService } from '../../src/campaigns/campaigns.service';
 import { createSeller, createBuyer, createLiveCampaign, cleanupTag, uniqueTag } from './fixtures';
 
 /**
- * Integration test for OrdersService.reconcileRefundsForCampaign — the
- * "a later buyer unlocked a lower price, top up everyone who paid more"
- * logic. Exercises real Prisma writes/reads against the configured
+ * Integration test for OrdersService.finalizeRefundsForCampaign — the
+ * "top up everyone who paid more than the campaign's final settled price"
+ * logic, run once when a campaign closes rather than on every order
+ * confirmation. Exercises real Prisma writes/reads against the configured
  * DATABASE_URL; Razorpay and the BullMQ refunds queue are mocked since this
  * only needs to verify a Refund ROW gets created with the right amount, not
  * that Razorpay/BullMQ themselves work (see TASKS.md 1.18).
  */
-describe('OrdersService.reconcileRefundsForCampaign', () => {
+describe('OrdersService.finalizeRefundsForCampaign', () => {
   const prisma = new PrismaClient();
   const tag = uniqueTag();
   let sellerId: string;
@@ -87,7 +88,7 @@ describe('OrdersService.reconcileRefundsForCampaign', () => {
       },
     });
 
-    await orders.reconcileRefundsForCampaign(campaignId);
+    await orders.finalizeRefundsForCampaign(campaignId);
 
     const refunds = await prisma.refund.findMany({ where: { orderId: order.id } });
     expect(refunds).toHaveLength(1);
@@ -98,7 +99,7 @@ describe('OrdersService.reconcileRefundsForCampaign', () => {
 
   it('is idempotent — a second call does not double-refund the same gap', async () => {
     refundsQueue.add.mockClear();
-    await orders.reconcileRefundsForCampaign(campaignId);
+    await orders.finalizeRefundsForCampaign(campaignId);
 
     const refunds = await prisma.refund.findMany({ where: { order: { campaignId } } });
     // Still just the one refund from the first call — nothing additional owed.

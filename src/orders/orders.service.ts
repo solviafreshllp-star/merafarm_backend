@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { OrderStatus, RefundStatus } from '@prisma/client';
@@ -12,6 +12,8 @@ import { resolveOrderAddress } from './address-scope.util';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly campaigns: CampaignsService,
@@ -91,9 +93,11 @@ export class OrdersService {
       });
     }
 
-    // This order may have just unlocked a lower tier for OTHER buyers who
-    // already paid more — reconcile automatic refunds for them now.
-    await this.reconcileRefundsForCampaign(order.campaignId);
+    // Refunds are settled once, in a lump sum, when the campaign's preorder
+    // window closes (see finalizeRefundsForCampaign / CampaignCloseService)
+    // — not here on every confirm — so just keep the live price/booked-count
+    // ticker in sync for buyers still browsing.
+    await this.campaigns.broadcastState(order.campaignId);
 
     return confirmed;
   }
@@ -107,54 +111,60 @@ export class OrdersService {
   }
 
   /**
-   * The automatic-refund half of the "no refund needed for your own order"
-   * rule: whenever a campaign's booked units change (i.e. right after any
-   * order is confirmed), find every other CONFIRMED order on that campaign
-   * that paid more than the campaign's current price and top up a refund
-   * for the difference. Idempotent — safe to call repeatedly as the price
-   * keeps dropping, since it only refunds the incremental difference not
-   * already covered by a prior refund on that order.
+   * Runs once — when a campaign's preorder window closes (see
+   * CampaignCloseService, which calls this right after flipping the
+   * campaign to CLOSED) — and settles every buyer's refund in a single
+   * lump sum against the campaign's final price, instead of one small
+   * refund per price drop during the window. That used to fire on every
+   * order confirmation (see git history), which meant a buyer who ordered
+   * early could rack up several tiny refunds as later buyers unlocked each
+   * successive tier; batching it here means one refund reflecting the
+   * group's best final price, which is both simpler for a buyer to make
+   * sense of and cheaper to process than N small ones.
+   *
+   * Idempotent — only tops up whatever isn't already covered by a refund
+   * on that order (relevant for orders that already got a partial refund
+   * from before this moved to close-time-only).
+   *
+   * Each order's refund is isolated in its own try/catch: one failure
+   * (e.g. a transient queue/DB hiccup) must not stop the rest of the
+   * campaign's buyers from being settled in the same pass.
    */
-  async reconcileRefundsForCampaign(campaignId: string) {
+  async finalizeRefundsForCampaign(campaignId: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id: campaignId },
       include: { slabs: { orderBy: { fromQty: 'asc' } } },
     });
     if (!campaign) return;
 
-    // Confirmed-units basis, not the raw reservation counter — see
-    // CampaignsService.confirmedUnitsFor's doc comment. This is also the
-    // exact moment the publicly-shown price/booked-count should move, so
-    // broadcast it now rather than only at reservation time.
     const confirmedUnits = await this.campaigns.confirmedUnitsFor(campaignId);
-    const nowPrice = currentPrice(campaign.slabs, confirmedUnits);
+    const finalPrice = currentPrice(campaign.slabs, confirmedUnits);
 
     const confirmedOrders = await this.prisma.order.findMany({
-      where: { campaignId, status: OrderStatus.CONFIRMED, unitPriceCharged: { gt: nowPrice } },
+      where: { campaignId, status: OrderStatus.CONFIRMED, unitPriceCharged: { gt: finalPrice } },
       include: { refunds: true },
     });
 
     for (const order of confirmedOrders) {
-      const alreadyRefunded = order.refunds.reduce((sum, r) => sum + r.amount, 0);
-      const fullEntitlement = (order.unitPriceCharged - nowPrice) * order.quantity;
-      const additional = fullEntitlement - alreadyRefunded;
-      if (additional <= 0) continue;
+      try {
+        const alreadyRefunded = order.refunds.reduce((sum, r) => sum + r.amount, 0);
+        const fullEntitlement = (order.unitPriceCharged - finalPrice) * order.quantity;
+        const additional = fullEntitlement - alreadyRefunded;
+        if (additional <= 0) continue;
 
-      const refund = await this.prisma.refund.create({
-        data: {
-          orderId: order.id,
-          amount: additional,
-          reason: `Group unlocked ₹${nowPrice}/${campaign.unitLabel} after this order was placed`,
-          status: RefundStatus.PENDING,
-        },
-      });
+        const refund = await this.prisma.refund.create({
+          data: {
+            orderId: order.id,
+            amount: additional,
+            reason: `Final group price was ₹${finalPrice}/${campaign.unitLabel} when the preorder window closed`,
+            status: RefundStatus.PENDING,
+          },
+        });
 
-      await this.refundsQueue.add('process-refund', { refundId: refund.id });
+        await this.refundsQueue.add('process-refund', { refundId: refund.id });
+      } catch (err) {
+        this.logger.error(`Could not settle refund for order ${order.orderNumber} (campaign ${campaignId})`, err as Error);
+      }
     }
-
-    // Push the real price change to clients now — this is the moment it
-    // actually happened, not when some earlier checkout merely reserved
-    // units (see CampaignsService.reserveUnits vs. broadcastState).
-    await this.campaigns.broadcastState(campaignId);
   }
 }

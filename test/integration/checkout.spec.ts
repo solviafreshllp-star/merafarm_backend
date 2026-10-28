@@ -1,6 +1,5 @@
 import { PrismaClient } from '@prisma/client';
 import { CampaignsService } from '../../src/campaigns/campaigns.service';
-import { OrdersService } from '../../src/orders/orders.service';
 import { CheckoutService } from '../../src/cart/checkout.service';
 import { createSeller, createBuyer, createLiveCampaign, cleanupTag, uniqueTag } from './fixtures';
 
@@ -18,13 +17,11 @@ describe('CheckoutService.checkout — atomic multi-campaign reservation', () =>
   const gateway = { broadcastCampaignUpdate: jest.fn() } as any;
   const notifications = { notify: jest.fn() } as any;
   const campaigns = new CampaignsService(prisma as any, gateway, notifications);
-  const razorpayQueueless = { add: jest.fn() } as any;
   const razorpay = {
     createOrder: jest.fn().mockResolvedValue({ id: 'order_test_mock' }),
     verifyPaymentSignature: jest.fn().mockReturnValue(true),
   } as any;
-  const orders = new OrdersService(prisma as any, campaigns, razorpay, razorpayQueueless);
-  const checkout = new CheckoutService(prisma as any, campaigns, orders, razorpay);
+  const checkout = new CheckoutService(prisma as any, campaigns, razorpay);
 
   let buyerId: string;
   let roomyCampaignId: string;
