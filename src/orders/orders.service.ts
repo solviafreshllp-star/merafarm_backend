@@ -53,9 +53,16 @@ export class OrdersService {
     });
 
     const razorpayOrder = await this.razorpay.createOrder(amount, orderNumber);
+    // Persisted so the payment webhook can map a `payment.captured` event
+    // back to this order without trusting the browser's own callback — see
+    // PaymentsWebhookController.
+    const withRazorpayId = await this.prisma.order.update({
+      where: { id: order.id },
+      data: { razorpayOrderId: razorpayOrder.id },
+    });
 
     return {
-      order,
+      order: withRazorpayId,
       razorpayOrderId: razorpayOrder.id,
       amount,
       currency: 'INR',
@@ -78,28 +85,56 @@ export class OrdersService {
     );
     if (!valid) throw new BadRequestException('Payment signature verification failed');
 
-    const confirmed = await this.prisma.order.update({
-      where: { id: order.id },
-      data: { status: OrderStatus.CONFIRMED, paymentRef: dto.razorpayPaymentId },
+    return this.markOrderConfirmed(order, dto.razorpayPaymentId);
+  }
+
+  /**
+   * The webhook-driven counterpart to confirmPayment() — called by
+   * PaymentsWebhookController on a `payment.captured` event, which is
+   * already authenticated via Razorpay's webhook signature (not the
+   * per-checkout order/payment/signature triple the browser provides), so
+   * there's no user/ownership context to check here. Returns null if no
+   * order matches this Razorpay order id (it may belong to a cart/group
+   * checkout instead — see CheckoutService.confirmGroupByRazorpayOrderId).
+   */
+  async confirmOrderByRazorpayOrderId(razorpayOrderId: string, paymentId: string) {
+    const order = await this.prisma.order.findUnique({ where: { razorpayOrderId } });
+    if (!order) return null;
+    return this.markOrderConfirmed(order, paymentId);
+  }
+
+  /**
+   * Shared by both confirmation paths above. Uses an atomic conditional
+   * update (not a plain update after a separate read) so that a webhook
+   * and the browser's own confirm call racing each other can't both run
+   * the referral-event/broadcast side effects twice — whichever commits
+   * first wins, and the other sees `count: 0` and does nothing further.
+   */
+  private async markOrderConfirmed(order: { id: string; status: OrderStatus; referralLinkId: string | null; quantity: number; campaignId: string }, paymentRef: string) {
+    const result = await this.prisma.order.updateMany({
+      where: { id: order.id, status: OrderStatus.PENDING_PAYMENT },
+      data: { status: OrderStatus.CONFIRMED, paymentRef },
     });
 
-    if (order.referralLinkId) {
-      await this.prisma.referralEvent.create({
-        data: {
-          referralLinkId: order.referralLinkId,
-          type: 'ORDER_PLACED',
-          unitsAdded: order.quantity,
-        },
-      });
+    if (result.count > 0) {
+      if (order.referralLinkId) {
+        await this.prisma.referralEvent.create({
+          data: {
+            referralLinkId: order.referralLinkId,
+            type: 'ORDER_PLACED',
+            unitsAdded: order.quantity,
+          },
+        });
+      }
+
+      // Refunds are settled once, in a lump sum, when the campaign's
+      // preorder window closes (see finalizeRefundsForCampaign /
+      // CampaignCloseService) — not here on every confirm — so just keep
+      // the live price/booked-count ticker in sync for buyers browsing.
+      await this.campaigns.broadcastState(order.campaignId);
     }
 
-    // Refunds are settled once, in a lump sum, when the campaign's preorder
-    // window closes (see finalizeRefundsForCampaign / CampaignCloseService)
-    // — not here on every confirm — so just keep the live price/booked-count
-    // ticker in sync for buyers still browsing.
-    await this.campaigns.broadcastState(order.campaignId);
-
-    return confirmed;
+    return this.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
   }
 
   async myOrders(userId: string) {

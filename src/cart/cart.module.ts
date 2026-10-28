@@ -10,5 +10,6 @@ import { RazorpayService } from '../payments/razorpay.service';
   imports: [CampaignsModule],
   controllers: [CartController, CheckoutController],
   providers: [CartService, CheckoutService, RazorpayService],
+  exports: [CheckoutService],
 })
 export class CartModule {}

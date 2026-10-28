@@ -4,7 +4,11 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true keeps the exact, unparsed request bytes available as
+  // `req.rawBody` on every request (alongside the normally-parsed
+  // `req.body`) — needed by the Razorpay webhook handler, whose HMAC
+  // signature is computed over the raw payload, not the re-serialized JSON.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.enableCors({
     origin: process.env.CORS_ORIGIN?.split(',') ?? 'http://localhost:3000',

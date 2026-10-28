@@ -180,9 +180,14 @@ model Order {
   unitPriceCharged  Int // the tier price this order's own quantity unlocked — see pricing.util.ts
   amount            Int // quantity * unitPriceCharged
 
-  status        OrderStatus @default(PENDING_PAYMENT)
-  paymentRef    String? // gateway payment/order id
-  paymentMethod String? // upi | card | netbanking | wallet
+  status          OrderStatus @default(PENDING_PAYMENT)
+  paymentRef      String? // gateway payment/order id
+  paymentMethod   String? // upi | card | netbanking | wallet
+  // The Razorpay order id for this single-order checkout (the cart/group
+  // checkout path stores the equivalent on OrderGroup.razorpayOrderId
+  // instead) — lets the webhook (src/payments) map a payment.captured
+  // event back to this row without trusting the browser's own callback.
+  razorpayOrderId String?     @unique
 
   // address is frozen onto the order at checkout time — city/pincode/locality/
   // society come from the campaign's own scope fields where the campaign's
@@ -230,7 +235,7 @@ model OrderGroup {
   id              String      @id @default(cuid())
   userId          String
   user            User        @relation(fields: [userId], references: [id])
-  razorpayOrderId String?
+  razorpayOrderId String?     @unique
   status          OrderStatus @default(PENDING_PAYMENT)
 
   orders Order[]

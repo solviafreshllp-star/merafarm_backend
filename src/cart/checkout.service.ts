@@ -101,26 +101,57 @@ export class CheckoutService {
     );
     if (!valid) throw new BadRequestException('Payment signature verification failed');
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const order of group.orders) {
-        await tx.order.update({
-          where: { id: order.id },
-          data: { status: OrderStatus.CONFIRMED, paymentRef: dto.razorpayPaymentId },
-        });
-      }
-      await tx.orderGroup.update({ where: { id: group.id }, data: { status: OrderStatus.CONFIRMED } });
+    return this.markGroupConfirmed(group, dto.razorpayPaymentId);
+  }
+
+  /**
+   * The webhook-driven counterpart to confirm() — called by
+   * PaymentsWebhookController on a `payment.captured` event, already
+   * authenticated via Razorpay's webhook signature, so there's no
+   * user/ownership context to check here. Returns null if no group
+   * matches this Razorpay order id (it may belong to a single-order direct
+   * checkout instead — see OrdersService.confirmOrderByRazorpayOrderId).
+   */
+  async confirmGroupByRazorpayOrderId(razorpayOrderId: string, paymentId: string) {
+    const group = await this.prisma.orderGroup.findUnique({ where: { razorpayOrderId }, include: { orders: true } });
+    if (!group) return null;
+    return this.markGroupConfirmed(group, paymentId);
+  }
+
+  /**
+   * Shared by both confirmation paths above. The OrderGroup update is the
+   * atomic conditional guard (`status: PENDING_PAYMENT` in the where
+   * clause) — if a webhook and the browser's own confirm call race each
+   * other, whichever commits first wins and the other sees `count: 0` and
+   * skips straight to returning the already-confirmed group.
+   */
+  private async markGroupConfirmed(group: { id: string; orders: Array<{ id: string; campaignId: string }> }, paymentRef: string) {
+    const result = await this.prisma.orderGroup.updateMany({
+      where: { id: group.id, status: OrderStatus.PENDING_PAYMENT },
+      data: { status: OrderStatus.CONFIRMED },
     });
 
-    // Refunds are settled once, in a lump sum, when each campaign's
-    // preorder window closes (see OrdersService.finalizeRefundsForCampaign)
-    // — not here on every confirm — so just keep the live price/booked-count
-    // ticker in sync for buyers still browsing. The group is only the
-    // checkout/payment unit; refunds stay scoped per campaign regardless.
-    const campaignIds = [...new Set(group.orders.map((o) => o.campaignId))];
-    for (const campaignId of campaignIds) {
-      await this.campaigns.broadcastState(campaignId);
+    if (result.count > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        for (const order of group.orders) {
+          await tx.order.update({
+            where: { id: order.id },
+            data: { status: OrderStatus.CONFIRMED, paymentRef },
+          });
+        }
+      });
+
+      // Refunds are settled once, in a lump sum, when each campaign's
+      // preorder window closes (see OrdersService.finalizeRefundsForCampaign)
+      // — not here on every confirm — so just keep the live price/booked-count
+      // ticker in sync for buyers still browsing. The group is only the
+      // checkout/payment unit; refunds stay scoped per campaign regardless.
+      const campaignIds = [...new Set(group.orders.map((o) => o.campaignId))];
+      for (const campaignId of campaignIds) {
+        await this.campaigns.broadcastState(campaignId);
+      }
     }
 
-    return this.prisma.orderGroup.findUnique({ where: { id: group.id }, include: { orders: true } });
+    return this.prisma.orderGroup.findUniqueOrThrow({ where: { id: group.id }, include: { orders: true } });
   }
 }

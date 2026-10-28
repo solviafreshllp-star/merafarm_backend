@@ -16,6 +16,7 @@ import { AdminModule } from './admin/admin.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RefundsModule } from './refunds/refunds.module';
 import { HealthModule } from './health/health.module';
+import { PaymentsModule } from './payments/payments.module';
 import { envValidationSchema } from './config/env.validation';
 
 @Module({
@@ -41,6 +42,7 @@ import { envValidationSchema } from './config/env.validation';
     AdminModule,
     RefundsModule,
     HealthModule,
+    PaymentsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
